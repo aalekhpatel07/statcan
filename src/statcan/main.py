@@ -7,7 +7,7 @@ from statcan.client import StatCan, Language, MetadataDatabase
 logger = logging.getLogger(__name__)
 
 
-def add_arguments(parser: argparse.ArgumentParser):
+def add_root_arguments(parser: argparse.ArgumentParser):
     parser.add_argument(
         "-v",
         "--verbose",
@@ -19,6 +19,14 @@ def add_arguments(parser: argparse.ArgumentParser):
         "--polars",
         action="store_true",
         help="Use polars instead of pandas. Note: This requires 'polars' extra be installed.",
+    )
+    parser.add_argument(
+        "-n",
+        "--return-rows",
+        default=None,
+        dest="return_rows",
+        type=int,
+        help="Number of rows to return (default is whatever df.head() returns)",
     )
 
 def add_download_arguments(parser: argparse.ArgumentParser):
@@ -49,10 +57,16 @@ def add_search_arguments(parser: argparse.ArgumentParser):
         dest="keywords",
         help="The keywords to search for",
     )
+    parser.add_argument(
+        "-d",
+        "--database-path",
+        type=str,
+        default=".statcan_db.sqlite",
+        help="The path to write the sqlite database of StatCAN catalogue to.",
+    )
 
 
 def add_subparsers(parser: argparse.ArgumentParser):
-    add_arguments(parser)
     subparsers = parser.add_subparsers(
         title="command",
         dest="command",
@@ -62,6 +76,7 @@ def add_subparsers(parser: argparse.ArgumentParser):
     search_parser = subparsers.add_parser("search")
     download_parser = subparsers.add_parser("download")
 
+    add_root_arguments(parser)
     add_download_arguments(download_parser)
     add_search_arguments(search_parser)
 
@@ -103,6 +118,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Download wrangled datasets for Pandas or Polars from "
                     "StatCAN just like how https://github.com/warint/statcanR does it in R.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     add_subparsers(parser)
     opts = parser.parse_args()
@@ -112,10 +128,10 @@ def main():
     client = StatCan()
 
     if opts.command == "search":
-        db = MetadataDatabase(path=":memory:")
+        db = MetadataDatabase(path=opts.database_path or ":memory:")
         db.load()
         df = db.search(*opts.keywords)
-        print(df.head())
+        print(df.head(n=opts.return_rows))
         return
 
     if opts.command == "download":
@@ -124,7 +140,7 @@ def main():
             df = csv.get_df_polars()
         else:
             df = csv.get_df_pandas()
-        print(df.head())
+        print(df.head(n=opts.return_rows))
         return
 
 

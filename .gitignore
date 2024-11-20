@@ -11,3 +11,4 @@ wheels/
 dist
 .cache.idea/
 .idea/
+*.sqlite
