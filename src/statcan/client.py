@@ -209,7 +209,7 @@ class StatCan:
             save_path = save_dir / f"statcan_{table_number}_{language}.csv"
             logger.info(f"Saving to {save_path}")
             with open(str(save_path), "w") as f:
-                f.write(contents.decode("utf-8"))
+                f.write(csv_contents.get_prepared_csv().decode("utf-8"))
 
         return csv_contents
 
