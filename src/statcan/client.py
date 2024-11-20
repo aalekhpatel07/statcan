@@ -1,6 +1,7 @@
 import csv
 import dataclasses
 import pathlib
+import sqlite3
 import typing
 from functools import cached_property
 
@@ -10,6 +11,7 @@ import io
 import zipfile
 from pathlib import Path
 import httpx
+import re
 
 _has_polars = False
 _has_pandas = False
@@ -153,32 +155,36 @@ class CSVContents:
             df = self.get_df_polars()
             df.write_csv(bio)
             return bio.getvalue()
-        raise ValueError(
+        raise RuntimeError(
             "Neither polars nor pandas backends are available to wrangle the csv. "
             "Please install one with 'pip install statcan[polars]' or 'pip install statcan[pandas]'"
         )
 
 
+def _setup_http_client():
+    try:
+        import hishel
+
+        controller = hishel.Controller(
+            cacheable_methods=["GET"],
+            cacheable_status_codes=[200],
+            allow_stale=True,
+            always_revalidate=True,
+        )
+        storage = hishel.FileStorage(
+            base_path=Path(".cache")
+        )
+        logger.debug("hishel client initialized. Responses may be cached.")
+        return hishel.CacheClient(controller=controller, storage=storage)
+    except ImportError:
+        logger.debug("hishel (http response cacher) is not installed. Responses may not be cached.")
+        return httpx.Client()
+
+
 class StatCan:
 
     def __init__(self):
-        try:
-            import hishel
-
-            controller = hishel.Controller(
-                cacheable_methods=["GET"],
-                cacheable_status_codes=[200],
-                allow_stale=True,
-                always_revalidate=True,
-            )
-            storage = hishel.FileStorage(
-                base_path=Path(".cache")
-            )
-            self.client = hishel.CacheClient(controller=controller, storage=storage)
-            logger.debug("hishel client initialized. Responses may be cached.")
-        except ImportError:
-            self.client = httpx.Client()
-            logger.debug("hishel (http response cacher) is not installed. Responses may not be cached.")
+        self.client = _setup_http_client()
 
     def download(self,
                  table_number: str,
@@ -213,5 +219,85 @@ class StatCan:
 
         return csv_contents
 
-    def search(self):
-        pass
+
+def match(expr, item):
+    if item is None:
+        return False
+    return re.search(expr, item) is not None
+
+
+class MetadataDatabase:
+
+    def __init__(self,
+                 path=".statcan_db.sqlite",
+                 dataset_url="https://gist.githubusercontent.com/aalekhpatel07/5a6ac4537d9b38965ebc0c2482f82d55/raw/e92efb28aecf28d0c0fae4f95058b8ad14948e4d/statcan_data.csv"
+                 ):
+        self.path = path
+        self.dataset_url = dataset_url
+
+        self.client = _setup_http_client()
+
+    def load(self):
+
+        response = self.client.get(self.dataset_url)
+        response.raise_for_status()
+        bio = io.BytesIO(response.content)
+
+        if _has_pandas:
+            df = pd.read_csv(bio, usecols=["title", "id", "description", "release_date", "lang"])
+            rows = df.values.tolist()
+        elif _has_polars:
+            df = pl.read_csv(bio)
+            rows = df.rows(named=False)
+        else:
+            raise RuntimeError(
+                "Neither polars nor pandas backends are available to wrangle the csv. "
+                "Please install one with 'pip install statcan[polars]' or 'pip install statcan[pandas]'"
+            )
+
+        self.connection = sqlite3.connect(self.path)
+        self.connection.create_function("MATCHES", 2, match)
+
+        _create_table_stmt = """
+        CREATE TABLE IF NOT EXISTS statcan (
+            _id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT,
+            data_id TEXT,
+            description TEXT,
+            release_date DATE,
+            lang TEXT
+        );
+        """
+        self.connection.execute(_create_table_stmt)
+
+        _insert_rows_stmt = """
+        INSERT INTO statcan (title, data_id, description, release_date, lang)
+        VALUES (?, ?, ?, ?, ?)
+        """
+
+        self.connection.executemany(_insert_rows_stmt, rows)
+        (rows_inserted, ) = self.connection.execute("SELECT COUNT(*) FROM statcan").fetchone()
+        logger.info(f"Inserted ({rows_inserted}) rows into the database.")
+
+    def search(self, *args):
+        """Search for the datasets whose titles or descriptions contain the provided keywords exactly.
+
+        Note: There's a risk oF SQL-injection here but if you do that to yourself
+              I can't say that's not deserved.
+        :param args:
+        :return:
+        """
+        keywords_or = "(" + "|".join(args) + ")"
+
+        search_stmt = """
+        SELECT title, data_id, description, release_date, lang
+        FROM statcan
+        WHERE MATCHES(?, title) OR MATCHES(?, description);
+        """
+        results = self.connection.execute(search_stmt, (keywords_or, keywords_or)).fetchall()
+
+        if _has_pandas:
+            return pd.DataFrame.from_records(results, columns=["title", "id", "description", "release_date", "lang"])
+        if _has_polars:
+            return pl.DataFrame(results, schema=["title", "id", "description", "release_date", "lang"])
+        return results
