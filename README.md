@@ -39,7 +39,6 @@ from pathlib import Path
 from statcan.client import StatCan, MetadataDatabase, Language
 
 
-client = StatCan()
 
 # To search for datasets containing keywords:
 db = MetadataDatabase()
@@ -47,7 +46,9 @@ db.load()
 df = db.search("labour", "force")
 print(df.head())
 
+
 # To download the cleaned dataset corresponding to a given table number.
+client = StatCan()
 
 # Get the table_number by running the search. 
 # For example:
