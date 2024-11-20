@@ -8,7 +8,9 @@ and offers Pandas or Polars dataframes, as required.
 This is not yet published on PyPI so meanwhile install it from the repo.
 
 ```shell
-pip install git+https://github.com/aalekhpatel07/statcan
+pip install "git+https://github.com/aalekhpatel07/statcan[pandas]"
+# or if you want to install with polars support instead of pandas:
+pip install "git+https://github.com/aalekhpatel07/statcan[polars]"
 ```
 
 ## Usage
